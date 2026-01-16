@@ -3,12 +3,23 @@ function widget:GetInfo()
     name      = "Silo Ballistic Trajectory",
     desc      = "Draws a ballistic trajectory for silo`s rockets",
     author    = "Stormev",
-    date      = "16.01.2026",
+    date      = "01.16.2026",
     license   = "GPL v2 or later",
     layer     = 0,
     enabled   = true,
   }
 end
+
+-- valid units for widget
+local validRocketUnits = {
+  ["empmissile"] = true,
+  ["napalmmissile"] = true,
+  ["subtacmissile"] = true,
+  ["tacnuke"] = true,
+  ["staticmissilesilo"] = true,
+  ["missileslow"] = true,
+  ["seismic"] = true,
+}
 
 -- Spring API shortcuts
 local spGetActiveCommand  = Spring.GetActiveCommand
@@ -26,48 +37,48 @@ local glColor        = gl.Color
 local glVertex       = gl.Vertex
 
 -- Physics
-local gravity = Game.gravity or 130
+local gravity = Game.gravity or 100
+local arcFactor = 0.5      --  gravity modifier ": <1 = "меньше g", >1 = "больше g" размер дуги
+local useHighArc = true    -- true = высокая арка
+local rocket_velocity = 500 -- rocket speed
+local startPoseHeight = 3000 -- postion when rocket go to arc status
 
 -- Calculate ballistic direction to hit `targetPos` from `startPos` with speed v
-local function CalcDirToHit(startPos, targetPos, v)
-  local dx = targetPos[1] - startPos[1]
-  local dz = targetPos[3] - startPos[3]
-  local dy = targetPos[2] - startPos[2]
+local function CalcDirToHit(startPos, targetPos, velocity, arcFactor, highArc)
+    arcFactor = arcFactor or 1.0
+    local gEffective = gravity * arcFactor
 
-  local dist = math.sqrt(dx*dx + dz*dz)
-  if dist <= 0.001 then
-    return nil -- no meaningful direction
-  end
+    local dx = targetPos[1] - startPos[1]
+    local dz = targetPos[3] - startPos[3]
+    local dy = targetPos[2] - startPos[2]
 
-  -- discriminant
-  local v2 = v * v
-  local g  = gravity
-  local term = v2*v2 - g * (g * dist*dist + 2 * dy * v2)
+    local dist = math.sqrt(dx*dx + dz*dz)
+    if dist < 1e-4 then return nil end
 
-  if term < 0 then
-    return nil -- unreachable with this speed
-  end
+    local hx = dx / dist
+    local hz = dz / dist
 
-  local sqrtTerm = math.sqrt(term)
+    local vxh = velocity * hx
+    local vzh = velocity * hz
+    local vh = math.sqrt(vxh*vxh + vzh*vzh)
+    if vh < 1e-6 then return nil end
 
-  -- choose lower trajectory (use + for higher arc)
-  local angle = math.atan((v2 - sqrtTerm) / (g * dist))
+    local tHit = dist / vh
 
-  -- horizontal dir
-  local hx = dx / dist
-  local hz = dz / dist
+    -- вертикальная скорость для точного попадания
+    local vy = (dy + 0.5 * gEffective * tHit * tHit) / tHit
+    if highArc then
+        vy = vy + math.sqrt(gEffective) * 0.1 * tHit -- немного выше для высокой дуги
+    end
 
-  -- construct direction vector
-  return {
-    hx * math.cos(angle),
-    math.sin(angle),
-    hz * math.cos(angle)
-  }
+    -- нормализуем dir
+    return {hx, vy / velocity, hz}
 end
 
-local function CalcLowPos(lowPos, startPos)
+-- draw vertical line to arc (visual)
+local function DrawLowPos(lowPos, startPos)
   glLineStipple("")
-  glColor(0.2, 1, 0.2, 1) -- желтоватая вспомогательная линия
+  glColor(0.2, 1, 0.2, 1)
 
   glBeginEnd(GL_LINE_STRIP, function()
     glVertex(lowPos[1], lowPos[2], lowPos[3])
@@ -78,35 +89,44 @@ local function CalcLowPos(lowPos, startPos)
 end
 
 -- Draw a ballistic trajectory
-local function DrawTrajectory(startPos, dir, velocity)
-  glLineStipple("")
-  glColor(0.2, 1, 0.2, 1) -- green
-  glBeginEnd(GL_LINE_STRIP, function()
+local function DrawTrajectory(startPos, dir, velocity, arcFactor)
+    arcFactor = arcFactor or 1.0
+    local gFactor = 0.5 * gravity * arcFactor
+
+    glLineStipple("")
+    glColor(0.2, 1, 0.2, 1)
+
     local vx = dir[1] * velocity
     local vy = dir[2] * velocity
     local vz = dir[3] * velocity
-    local t  = 0
-    while true do
-      local x = startPos[1] + vx * t
-      local y = startPos[2] + vy * t - (0.5) * gravity * (t*t) -- base - (0.5)
-      local z = startPos[3] + vz * t
 
-      if y <= spGetGroundHeight(x, z) then
-        break
-      end
 
-      glVertex(x, y, z)
-      t = t + 0.02
-      if t > 10 then
-        break
-      end
-    end
-  end)
-  glColor(1, 1, 1, 1)
+    local t = 0 -- time (step)
+    local firstStep = true
+
+    glBeginEnd(GL_LINE_STRIP, function()
+        while t <= 10 do
+            local x = startPos[1] + vx * t
+            local y = startPos[2] + vy * t - gFactor * t*t
+            local z = startPos[3] + vz * t
+
+            -- ground block
+            if y <= spGetGroundHeight(x, z) and not firstStep then
+                break
+            end
+
+            glVertex(x, y, z)
+            firstStep = false
+            t = t + 0.02
+        end
+    end)
+
+    glColor(1, 1, 1, 1)
 end
 
 function widget:DrawWorld()
 	
+  -- while attacking
   local _, activeCmd = spGetActiveCommand()
   if activeCmd ~= CMD.ATTACK then
     return
@@ -120,16 +140,20 @@ function widget:DrawWorld()
 
   local units = spGetSelectedUnits() or {}
   for _, unitID in ipairs(units) do
+  
+    local ud = UnitDefs[Spring.GetUnitDefID(unitID)]
     local ux, uy, uz = spGetUnitPosition(unitID)
-    if ux then
-	
-	  local lowPos = {ux, uy, uz}
-      local startPos = {ux, uy + 3000, uz}
-      local dir = CalcDirToHit(startPos, worldPos, 500)
-      if dir then
-	    CalcLowPos(lowPos, startPos)
-        DrawTrajectory(startPos, dir, 500) -- * магическое число которое делает дзен :)
-      end
-    end
+	if ud and validRocketUnits[ud.name] then
+		if ux then
+			local lowPos = {ux, uy, uz}
+			local startPos = {ux, uy + startPoseHeight, uz}
+			  
+			local dir = CalcDirToHit(startPos, worldPos, rocket_velocity, arcFactor, useHighArc)
+			if dir then
+			  DrawLowPos(lowPos, startPos)               
+			  DrawTrajectory(startPos, dir, rocket_velocity, arcFactor, worldPos)
+			end
+		end
+	end
   end
 end
