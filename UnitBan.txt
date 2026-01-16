@@ -1,0 +1,21 @@
+SuperWeapon -- mahlazer(starLight)|zenith|raveparty|striderdetriment|staticheavyarty|staticantinuke|staticnuke|empmissile|
+
+Energy -- |energysingu|energyfusion|
+
+Factorys -- |factoryamph|factorycloak|factorygunship|factoryhover|factoryjump|factoryplane|factoryshield|factoryship|factoryspider|factorytank|factoryveh|striderhub|
+
+=================================
+
+ComboBans_1 -- mahlazer+zenith+raveparty+striderdetriment
+
+ComboBans_1.5 -- mahlazer+zenith+raveparty
+
+ComboBans_2 -- mahlazer+zenith+raveparty+empmissile+striderdetriment
+
+ComboBans_2.5 -- mahlazer+zenith+raveparty+empmissile
+
+ComboBans_3 -- factoryamph+factorycloak+factorygunship+factoryhover+factoryjump+factoryplane+factoryshield+factoryship+factoryspider+factorytank+factoryveh+striderhub
+
+ComboBans_4 -- mahlazer+zenith+raveparty+empmissile+turretimpulse+striderdetriment
+
+ComboBans_4.5 -- mahlazer+zenith+raveparty+empmissile+turretimpulse
