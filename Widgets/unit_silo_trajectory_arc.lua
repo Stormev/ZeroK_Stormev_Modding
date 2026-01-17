@@ -21,6 +21,15 @@ local validRocketUnits = {
   ["seismic"] = true,
 }
 
+-- low start height rockets
+local lowHeightRockets = {
+  ["napalmmissile"] = true,
+  ["subtacmissile"] = true,
+  ["tacnuke"] = true,
+  ["missileslow"] = true,
+  ["seismic"] = true,
+}
+
 -- Spring API shortcuts
 local spGetActiveCommand  = Spring.GetActiveCommand
 local spGetMouseState     = Spring.GetMouseState
@@ -42,6 +51,7 @@ local arcFactor = 0.5      --  gravity modifier ": <1 = "меньше g", >1 = "
 local useHighArc = true    -- true = высокая арка
 local rocket_velocity = 500 -- rocket speed
 local startPoseHeight = 3000 -- postion when rocket go to arc status
+local startPoseLowHeight = 500 -- postion when rocket go to arc status (not emp or slow)
 
 -- Calculate ballistic direction to hit `targetPos` from `startPos` with speed v
 local function CalcDirToHit(startPos, targetPos, velocity, arcFactor, highArc)
@@ -143,10 +153,17 @@ function widget:DrawWorld()
   
     local ud = UnitDefs[Spring.GetUnitDefID(unitID)]
     local ux, uy, uz = spGetUnitPosition(unitID)
+	
 	if ud and validRocketUnits[ud.name] then
+	
+	    local currentStartPoseHeight = startPoseHeight
+		if lowHeightRockets[ud.name] then
+			currentStartPoseHeight = startPoseLowHeight
+		end
+		
 		if ux then
 			local lowPos = {ux, uy, uz}
-			local startPos = {ux, uy + startPoseHeight, uz}
+			local startPos = {ux, uy + currentStartPoseHeight, uz}
 			  
 			local dir = CalcDirToHit(startPos, worldPos, rocket_velocity, arcFactor, useHighArc)
 			if dir then
