@@ -11,10 +11,17 @@ function widget:GetInfo()
 	}
 end
 
+-- memory
 local detectedAntinukes = {}
 local enemyTeams = {}
-local launcherID = false
+
+local selectedNukeLaunchers = {}
+
+-- iternal names
 local antiNukeDefID = UnitDefNames["staticantinuke"] and UnitDefNames["staticantinuke"].id
+-- internal name пусковой
+local LAUNCHER_DEF_ID = UnitDefNames["staticnuke"] and UnitDefNames["staticnuke"].id
+-- проверяет: возвращает unitID launcher’а, если такой выбран
 
 -- параметры
 local searchRadius = 3000
@@ -25,9 +32,10 @@ local baseRadius = 1000
 local PROPORTION = 1.5
 local baseSafeRange = 6660
 local MAX_R = 2500
-local MIN_R = 800
+local MIN_R = 500
 local lastRange = 0
 
+-- data accestion object
 local myPlayerID = Spring.GetMyPlayerID()
 local myTeamID, myAllyTeamID
 local selectionChanged = false
@@ -43,41 +51,280 @@ local spIsPosInRadar              = Spring.IsPosInRadar
 local spAreTeamsAllied          = Spring.AreTeamsAllied
 local Echo                      = Spring.Echo
 
--- internal name пусковой
-local LAUNCHER_DEF_ID = UnitDefNames["staticnuke"] and UnitDefNames["staticnuke"].id
--- проверяет: возвращает unitID launcher’а, если такой выбран
+local glColor        = gl.Color
+local glLineWidth    = gl.LineWidth
+local glBeginEnd     = gl.BeginEnd
+local glVertex       = gl.Vertex
+local glDepthTest    = gl.DepthTest
+local GL_LINES       = GL.LINES
+local spGetGroundHeight = Spring.GetGroundHeight
 
 
-function calcRealRadius(pos_x, pos_y, pos_z)
-	local lx, ly, lz = select(7, spGetUnitPosition(launcherID, true, true))
-	
-	-- расстояние между пусковой и antinuke
-	local dx = lx - pos_x
-	local dz = lz - pos_z
-	local p = math.sqrt(dx*dx + dz*dz)
-	
-	if p < MIN_R then
-		p = MIN_R
+-- seek most smallest distance between anti and nuke launcher
+function findNearestNukeLauncher(pos_x, pos_y, pos_z) -- arguments - anti pos
+	if selectedNukeLaunchers and #selectedNukeLaunchers > 0 then
+		local ways = {}
+		local minUnit, minValue
+
+		for _, unitId in pairs(selectedNukeLaunchers) do
+			local x, y, z = select(4, spGetUnitPosition(unitId, true))
+			local dx = x - pos_x
+			local dz = z - pos_z
+			local p = math.sqrt(dx*dx + dz*dz)
+			ways[unitId] = p
+		end
+		
+		for unitID, value in pairs(ways) do
+			if minValue == nil or value < minValue then
+				minValue = value
+				minUnit = unitID
+			end
+		end
+		return minUnit
 	end
-
-	local r = (baseSafeRange - p) * PROPORTION
-
-	if r > MAX_R then
-		r = MAX_R
-	end
-	
-	if r < MIN_R then
-		r = MIN_R
-	end
-
-	return r
+	return nil
 end
 
+-- calculate anti-nuke radius
+function calcRealRadius(pos_x, pos_y, pos_z) -- arguments - anti pos
+	if selectedNukeLaunchers and #selectedNukeLaunchers > 0 then
+		local lx, ly, lz = select(7, spGetUnitPosition(findNearestNukeLauncher(pos_x, pos_y, pos_z), true, true))
+		
+		-- расстояние между пусковой и antinuke
+		local dx = lx - pos_x
+		local dz = lz - pos_z
+		local p = math.sqrt(dx*dx + dz*dz)
+		
+		if p < MIN_R then
+			p = MIN_R
+		end
+
+		local r = (baseSafeRange - p) * PROPORTION
+
+		if r > MAX_R then
+			r = MAX_R
+		end
+		
+		if r < MIN_R then
+			r = MIN_R
+		end
+
+		return r
+	end
+end
+
+function getSelectedNukeLaunchers()
+	local selectedNukes = spGetselectedUnitsSorted()[LAUNCHER_DEF_ID]
+	if selectedNukes then
+		return selectedNukes
+	end
+	return {}
+end
+
+-- draw line
+local function DrawGroundLine(x1, z1, x2, z2)
+    local y1 = spGetGroundHeight(x1, z1)
+    local y2 = spGetGroundHeight(x2, z2)
+	
+	glColor(1, 0, 0, 0.6)
+    glLineWidth(2)
+	
+    glBeginEnd(GL_LINES, function()
+        glVertex(x1, y1 + 5, z1)
+        glVertex(x2, y2 + 5, z2)
+    end)
+	
+	glColor(1, 1, 1, 1)
+    glLineWidth(1)
+end
+
+local function calcNukeThreatAngle(ax, ay, az)
+    -- ищем ближайшего nuke лаунчера
+    local nearestLauncher = findNearestNukeLauncher(ax, ay, az)
+    if not nearestLauncher then
+        return nil
+    end
+
+    -- получаем позицию этого лаунчера
+    local lx, ly, lz = spGetUnitPosition(nearestLauncher)
+    if not lx then
+        return nil
+    end
+
+    -- горизонтальный вектор от anti→launcher
+    local dirX = lx - ax
+    local dirZ = lz - az
+
+    -- угол в радианах
+    local angleRad = math.atan2(dirZ, dirX)
+
+    -- преобразуем в градусы (если нужны градусы)
+    local angleDeg = angleRad * (180 / math.pi)
+
+    return angleRad, angleDeg, nearestLauncher
+end
+
+local function DrawThreatDirectionLine(ax, ay, az)
+    -- получаем направление
+    local angleRad = select(1, calcNukeThreatAngle(ax, ay, az))
+    if not angleRad then
+        return
+    end
+
+    -- длина линии
+    local length = 2500
+
+    -- конечная точка в направлении угла
+    local endX = ax + math.cos(angleRad) * length
+    local endZ = az + math.sin(angleRad) * length
+
+    -- высоты земли
+    local startY = Spring.GetGroundHeight(ax, az)
+    local endY   = Spring.GetGroundHeight(endX, endZ)
+
+    -- рисуем линию
+    gl.Color(1, 0.5, 0, 0.3)
+    gl.LineWidth(2)
+
+    gl.BeginEnd(GL.LINES, function()
+        gl.Vertex(ax, startY + 5, az)
+        gl.Vertex(endX, endY + 5, endZ)
+    end)
+
+    gl.LineWidth(1)
+    gl.Color(1,1,1,1)
+end
+
+local function DrawThreatWall(ax, ay, az, offsetAlongThreat, lenght)
+
+    -- получаем направление угрозы
+    local angleRad = select(1, calcNukeThreatAngle(ax, ay, az))
+    if not angleRad then
+        return
+    end
+
+    offsetAlongThreat = offsetAlongThreat or 0
+
+    -- длина стены
+    local halfLength = (lenght or 5000) * 0.5
+
+    -- вектор направления угрозы
+    local dirX = math.cos(angleRad)
+    local dirZ = math.sin(angleRad)
+
+    -- перпендикулярный вектор на 90°
+    local perpX = -dirZ
+    local perpZ = dirX
+
+    -- центр стены со смещением вдоль направления угрозы
+    -- отрицательное offset → против стороны угрозы
+    local centerX = ax - dirX * -offsetAlongThreat
+    local centerZ = az - dirZ * -offsetAlongThreat
+
+    -- точки начала и конца стены перпендикулярно угрозе
+    local startX = centerX + perpX * halfLength
+    local startZ = centerZ + perpZ * halfLength
+
+    local endX   = centerX - perpX * halfLength
+    local endZ   = centerZ - perpZ * halfLength
+
+    -- высоты по поверхности
+    local startY = Spring.GetGroundHeight(startX, startZ)
+    local endY   = Spring.GetGroundHeight(endX, endZ)
+
+    -- рисуем линию
+    gl.Color(1, 0.7, 0, 0.5)
+    gl.LineWidth(2)
+
+    gl.BeginEnd(GL.LINES, function()
+        gl.Vertex(startX, startY + 5, startZ)
+        gl.Vertex(endX, endY + 5, endZ)
+    end)
+
+    gl.LineWidth(1)
+    gl.Color(1,1,1,1)
+end
+
+local function DrawThreatWallStatic(ax, ay, az, offsetAlongThreat)
+
+    -- получаем направление угрозы
+    local angleRad = select(1, calcNukeThreatAngle(ax, ay, az))
+    if not angleRad then
+        return
+    end
+
+    offsetAlongThreat = offsetAlongThreat or 0
+
+    -- длина стены
+    local halfLength = 5000 * 0.5
+
+    -- вектор направления угрозы
+    local dirX = math.cos(angleRad)
+    local dirZ = math.sin(angleRad)
+
+    -- перпендикулярный вектор на 90°
+    local perpX = -dirZ
+    local perpZ = dirX
+
+    -- центр стены со смещением вдоль направления угрозы
+    -- отрицательное offset → против стороны угрозы
+    local centerX = ax - dirX * -offsetAlongThreat
+    local centerZ = az - dirZ * -offsetAlongThreat
+
+    -- точки начала и конца стены перпендикулярно угрозе
+    local startX = centerX + perpX * halfLength
+    local startZ = centerZ + perpZ * halfLength
+
+    local endX   = centerX - perpX * halfLength
+    local endZ   = centerZ - perpZ * halfLength
+
+    -- высоты по поверхности
+    local startY = Spring.GetGroundHeight(startX, startZ)
+    local endY   = Spring.GetGroundHeight(endX, endZ)
+
+    -- рисуем линию
+    gl.Color(1, 0, 0, 1)
+    gl.LineWidth(2)
+
+    gl.BeginEnd(GL.LINES, function()
+        gl.Vertex(startX, startY + 5, startZ)
+        gl.Vertex(endX, endY + 5, endZ)
+    end)
+
+    gl.LineWidth(1)
+    gl.Color(1,1,1,1)
+end
+
+
+-- draw frontline summary others radius antis
+function drawAntiNukeFrontLine()
+	for unitID, pos in pairs(detectedAntinukes) do
+        -- проверка существования юнита
+        if not Spring.ValidUnitID(unitID) then
+            if Spring.IsPosInRadar(pos.x, pos.y, pos.z, myAllyTeamID) then
+                Spring.Echo("Antinuke "..unitID.." doesn't exist anymore!")
+                detectedAntinukes[unitID] = nil
+            end
+            return
+        end
+
+        -- обновление позиции
+        local x,y,z = Spring.GetUnitPosition(unitID)
+        pos.x, pos.y, pos.z = x,y,z
+
+        -- x y z -- anti pos
+        DrawThreatDirectionLine(x, y, z)
+		DrawThreatWall(x, y, z, calcRealRadius(x, y, z) * 0.95)
+		DrawThreatWallStatic(x, y, z, 20)
+    end
+end
+
+-- draw
 function widget:DrawWorld()
-	if not launcherID then
+	if #selectedNukeLaunchers <= 1 then
 		return
 	end
-
+	
 	gl.Color(1, 0, 0, 0.4)
 	for unitID, pos in pairs(detectedAntinukes) do
 		local x,y,z = select(4, spGetUnitPosition(unitID, true))
@@ -87,13 +334,21 @@ function widget:DrawWorld()
 			if spIsPosInRadar(pos.x, pos.y, pos.z, myAllyTeamID) then
 				Echo('Antinuke ' .. unitID .. ' doesn\'t exist anymore !')
 				detectedAntinukes[unitID] = nil
+				return
 			end
 		end
+		glLineWidth(2)
 		gl.DrawGroundCircle(pos.x, pos.y, pos.z, calcRealRadius(pos.x, pos.y, pos.z), 60)
 	end
+	
+	drawAntiNukeFrontLine()
+	
 	gl.Color(1,1,1,1)
+	glLineWidth(1)
 end
 
+
+-- seek anti's
 function widget:Update(dt)
 	timeSinceLastScan = timeSinceLastScan + dt
 	if timeSinceLastScan > scanStepDelay then
@@ -107,12 +362,17 @@ function widget:Update(dt)
 	end
 end
 
+
+-- draw distance
 function widget:DrawScreen()
-	if not launcherID then
+	local selectedNukeLaunchers = getSelectedNukeLaunchers()
+	
+	if selectedNukeLaunchers and #selectedNukeLaunchers <= 1 then
 		return
 	end
+	
+	local lx, ly, lz = select(7, spGetUnitPosition(selectedNukeLaunchers[1], true, true)) -- get aim position
 
-	local lx, ly, lz = select(7, spGetUnitPosition(launcherID, true, true)) -- get aim position
 	if not lx then
 		return
 	end
@@ -142,10 +402,12 @@ function widget:DrawScreen()
 	gl.Color(1,1,1,1)
 end
 
+-- if destroyed
 function widget:UnitDestroyed(unitID)
 	detectedAntinukes[unitID] = nil
 end
 
+-- if given
 function widget:UnitGiven(unitID, deFID, toTeam, fromTeam)
 	if detectedAntinukes[unitID] and spAreTeamsAllied(toTeam, myTeamID) then
 		Echo("Enemy AntiNuke captured! " .. unitID)
@@ -153,6 +415,7 @@ function widget:UnitGiven(unitID, deFID, toTeam, fromTeam)
 	end
 end
 
+-- if captured
 function widget:UnitTaken(unitID, defID, fromTeam, toTeam)
 	if defID == antiNukeDefID and spAreTeamsAllied(fromTeam, myTeamID) and not spAreTeamsAllied(toTeam, myTeamID) then
 		local x, y, z = select(4, spGetUnitPosition(unitID, true))
@@ -182,6 +445,7 @@ end
 -- 	end
 -- end
 
+-- if we see enemy anti nuke
 function widget:UnitEnteredLos(unitID, teamID, forAllyTeam, defID)
 	if not detectedAntinukes[unitID] then
 		if enemyTeams[teamID] then
@@ -204,14 +468,16 @@ function widget:UnitEnteredLos(unitID, teamID, forAllyTeam, defID)
 	end
 end
 
-function widget:SelectionChanged()
+function widget:SelectionChanged(selectedUnits, deselectedUnits)
 	selectionChanged = true
+	selectedNukeLaunchers = getSelectedNukeLaunchers()
 end
+
 function widget:CommandsChanged()
 	if selectionChanged then
 		selectionChanged = false
 		local selectedNukes = spGetselectedUnitsSorted()[LAUNCHER_DEF_ID]
-		launcherID = selectedNukes and selectedNukes[1]
+		selectedNukeLaunchers = selectedNukes or {}
 	end
 end
 
