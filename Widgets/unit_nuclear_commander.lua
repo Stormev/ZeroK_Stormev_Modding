@@ -299,11 +299,11 @@ end
 -- draw frontline summary others radius antis
 function drawAntiNukeFrontLine()
 	for unitID, pos in pairs(detectedAntinukes) do
-        -- проверка существования юнита
+        --проверка существования юнит
         if not Spring.ValidUnitID(unitID) then
-            if Spring.IsPosInRadar(pos.x, pos.y, pos.z, myAllyTeamID) then
-                Spring.Echo("Antinuke "..unitID.." doesn't exist anymore!")
-                detectedAntinukes[unitID] = nil
+           if Spring.IsPosInRadar(pos.x, pos.y, pos.z, myAllyTeamID) then
+               Spring.Echo("Antinuke "..unitID.." doesn't exist anymore!")
+               detectedAntinukes[unitID] = nil
             end
             return
         end
@@ -314,9 +314,16 @@ function drawAntiNukeFrontLine()
 
         -- x y z -- anti pos
         DrawThreatDirectionLine(x, y, z)
-		DrawThreatWall(x, y, z, calcRealRadius(x, y, z) * 0.95)
+		DrawThreatWall(x, y, z, calcRealRadius(x, y, z) * 1)
 		DrawThreatWallStatic(x, y, z, 20)
     end
+end
+
+function drawAntiNukeFrontLine_Single(x, y, z) -- x y z -- anti pos
+	-- x y z -- anti pos
+	DrawThreatDirectionLine(x, y, z)
+	DrawThreatWall(x, y, z, calcRealRadius(x, y, z) * 1)
+	DrawThreatWallStatic(x, y, z, 20)
 end
 
 -- draw
@@ -333,15 +340,16 @@ function widget:DrawWorld()
 		else
 			if spIsPosInRadar(pos.x, pos.y, pos.z, myAllyTeamID) then
 				Echo('Antinuke ' .. unitID .. ' doesn\'t exist anymore !')
-				detectedAntinukes[unitID] = nil
+				--detectedAntinukes[unitID] = nil
 				return
 			end
 		end
 		glLineWidth(2)
 		gl.DrawGroundCircle(pos.x, pos.y, pos.z, calcRealRadius(pos.x, pos.y, pos.z), 60)
+		drawAntiNukeFrontLine_Single(pos.x, pos.y, pos.z)
 	end
 	
-	drawAntiNukeFrontLine()
+	--drawAntiNukeFrontLine()
 	
 	gl.Color(1,1,1,1)
 	glLineWidth(1)
@@ -356,7 +364,7 @@ function widget:Update(dt)
 		for unitID, pos in pairs(detectedAntinukes) do
 			if not spGetUnitPosition(unitID) and spIsPosInRadar(pos.x, pos.y, pos.z, allyTeamID) then
 				Echo('Antinuke ' .. unitID .. ' doesn\'t exist anymore (update)!')
-				detectedAntinukes[unitID] = nil
+				--detectedAntinukes[unitID] = nil
 			end
 		end
 	end
