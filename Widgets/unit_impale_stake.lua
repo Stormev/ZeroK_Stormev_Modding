@@ -10,6 +10,9 @@ function widget:GetInfo()
   }
 end
 
+-- LuaUI/Widgets/vehheavyarty_zone_predict.lua
+-- (вставь/замени этим файлом существующий виджет)
+
 --------------------------------------------------------------------------------
 -- Config
 --------------------------------------------------------------------------------
@@ -33,7 +36,16 @@ local MIN_LEAD_TIME       = 0.35       -- minimal lead time to avoid "under-foot
 local LEAD_FACTOR = 0.50     -- 0.5 = сократить упреждение на 50%; подбирай 0.0..1.0
 local SMOOTHING_ALPHA = 0.70 -- 0..1: 1 = без сглаживания, 0.7 = сильный откат к новому прицелу
 
-local ignoreEnemyInZone = true
+local ignoreEnemyInZone = false
+
+-- stream fire state
+local streamFireEnabled    = false   -- переключается UI
+local streamQueue          = {}      -- список uid, отсортированных
+local streamIndex          = 1       -- текущий индекс в очереди
+local streamTimer          = 0       -- таймер задержки между выстрелами
+local streamInterval       = 0       -- время между выстрелами (R / N)
+local streamReloadtime     = nil     -- reloadtime всех (пока одинаковое)
+local streamPending        = {}      -- uid -> params (перехваченные ATTACK параметры)
 
 -- visuals
 local COLOR_ZONE_PREVIEW  = {1,1,0,0.28}
@@ -55,7 +67,8 @@ local btnRadiusMinus   = { x=MARGIN, y=MARGIN+MARGIN_Y + 2*(BTN_H + MARGIN), w=3
 local btnRadiusPlus    = { x=MARGIN + 40, y=MARGIN+MARGIN_Y + 2*(BTN_H + MARGIN), w=36, h=36 }
 
 -- toggle ignore enemies in zone
-local btnIgnoreToggle  = { x=MARGIN, y=MARGIN+MARGIN_Y + 3*(BTN_H + MARGIN), w=76, h=36 }
+local btnIgnoreToggle  = { x=MARGIN, y=MARGIN+MARGIN_Y + 3*(BTN_H + MARGIN), w=150, h=36 }
+local btnStreamFire = {x = MARGIN,y = MARGIN + MARGIN_Y + 4*(BTN_H + MARGIN),w = 150,h = 36}
 
 local zoneModeActive  = false
 local mouseX, mouseY  = 0, 0
@@ -70,9 +83,8 @@ local zoneSustained    = false
 local predictiveUnits  = {}
 local predictedData    = {}          -- uid -> { targetX,Y,Z, aimX,Y,Z }
 
---------------------------------------------------------------------------------
 -- Spring locals - cached for speed
---------------------------------------------------------------------------------
+
 local spGetSelectedUnits  = Spring.GetSelectedUnits
 local spGetUnitDefID      = Spring.GetUnitDefID
 local spGetUnitPosition   = Spring.GetUnitPosition
@@ -86,10 +98,11 @@ local spEcho              = Spring.Echo
 local spTraceScreenRay    = Spring.TraceScreenRay
 local spGetLocalTeamID    = Spring.GetLocalTeamID
 local spGetGameSeconds    = Spring.GetGameSeconds
+local spGetUnitAllyTeam = Spring.GetUnitAllyTeam
+local spGetLocalAllyTeamID = Spring.GetLocalAllyTeamID
 
---------------------------------------------------------------------------------
 -- Helpers
---------------------------------------------------------------------------------
+
 local function safeRectCheck(px, py, rect)
   if not rect then return false end
   if type(rect.x) ~= "number" then return false end
@@ -128,6 +141,14 @@ local function Distance2D(x1,z1,x2,z2)
   local dx = x1 - x2
   local dz = z1 - z2
   return math.sqrt(dx*dx + dz*dz)
+end
+
+-- shallow copy params
+local function CopyParams(params)
+  if not params then return nil end
+  local t = {}
+  for i = 1, #params do t[i] = params[i] end
+  return t
 end
 
 -- Solve intercept time (XZ plane) - kept as fallback (not primary)
@@ -177,7 +198,7 @@ local function GetUnitProjectileSpeed(unitID)
   return DEFAULT_PROJSPD
 end
 
--- Get flightTime from weapondef - primary source for predictive time
+-- Get flightTime from weapondef - primary source for predictive time LEGACY
 local function GetUnitWeaponFlightTime(unitID)
   if not unitID or not spValidUnitID(unitID) then return DEFAULT_PROJ_LIFE end
   local defID = spGetUnitDefID(unitID)
@@ -199,54 +220,179 @@ local function GetUnitWeaponFlightTime(unitID)
   return DEFAULT_PROJ_LIFE
 end
 
---------------------------------------------------------------------------------
--- Issue one randomized wave centered on `center` for units in zoneUnits (snapshot)
---------------------------------------------------------------------------------
+-- FireStream
+
+--preparing
+local function PrepareStreamQueue()
+  local sel = GetArtySelection()
+  -- если нет выбранных — оставляем очередь пустой, но не выключаем режим
+  if #sel < 1 then
+    streamQueue = {}
+    streamIndex = 1
+    streamInterval = 0
+    streamReloadtime = nil
+    streamTimer = 0
+    streamPending = {}
+    return
+  end
+
+  -- snapshot очереди (актуальная выборка)
+  streamQueue = {}
+  for _, uid in ipairs(sel) do
+    if spValidUnitID(uid) then
+      table.insert(streamQueue, uid)
+    end
+  end
+
+  -- получаем reloadtime (предполагаем одинаковое для всех)
+  local first = streamQueue[1]
+  local udid = first and Spring.GetUnitDefID(first)
+  local ud = udid and UnitDefs[udid]
+  if ud then
+    streamReloadtime = ud.weapons and ud.weapons[1] and ud.weapons[1].reloadtime or nil
+  end
+
+  if not streamReloadtime then
+    streamReloadtime = WAVE_INTERVAL or 10
+  end
+
+  -- рассчитываем интервал (R / N)
+  local count = #streamQueue
+  if count > 0 then
+    streamInterval = streamReloadtime / count
+  else
+    streamInterval = 0
+  end
+
+  streamIndex = 1
+  streamTimer = 0
+end
+
+
+-- Issue one randomized wave centered on `center` for units in zoneUnits
+
 local function IssueZoneWave(center)
   if not center or not zoneUnits or #zoneUnits == 0 then return end
+
+  local myAllyTeam = spGetLocalAllyTeamID()
   local enemies = {}
+
   if spGetUnitsInSphere then
     local found = spGetUnitsInSphere(center[1], center[2], center[3], previewRadius) or {}
-    for i=1,#found do
+    for i = 1, #found do
       local u = found[i]
-      if spValidUnitID(u) and spGetUnitTeam(u) ~= spGetLocalTeamID() then
-        enemies[#enemies+1] = u
+      if spValidUnitID(u) then
+        local ally = spGetUnitAllyTeam(u)
+        if ally and ally ~= myAllyTeam then
+          enemies[#enemies + 1] = u
+        end
       end
     end
   end
 
-  for i=1,#zoneUnits do
+  for i = 1, #zoneUnits do
     local uid = zoneUnits[i]
-    if not spValidUnitID(uid) then
-      -- skip dead/invalid
-    else
+    if spValidUnitID(uid) then
       local tx, tz
+
       if #enemies > 0 and not ignoreEnemyInZone then
-        local target = enemies[((i-1) % #enemies) + 1]
+        local target = enemies[((i - 1) % #enemies) + 1]
         if spValidUnitID(target) then
           local etx, ety, etz = spGetUnitPosition(target)
-          local jitterR = math.random(RANDOM_SPREAD_MIN, math.min(RANDOM_SPREAD_MAX, 40))
-          local ang = math.random() * 2 * math.pi
-          tx = etx + math.cos(ang) * jitterR
-          tz = etz + math.sin(ang) * jitterR
-        else
-          tx, tz = RandomPointInCircle(center[1], center[3], previewRadius)
+          if etx then
+            local jitterR = math.random(
+              RANDOM_SPREAD_MIN,
+              math.min(RANDOM_SPREAD_MAX, previewRadius)
+            )
+            local ang = math.random() * 2 * math.pi
+            tx = etx + math.cos(ang) * jitterR
+            tz = etz + math.sin(ang) * jitterR
+          end
         end
-      else
+      end
+
+      -- fallback: стреляем в случайную точку зоны
+      if not tx or not tz then
         tx, tz = RandomPointInCircle(center[1], center[3], previewRadius)
       end
+
       local ty = center[2]
-      spGiveOrderToUnit(uid, CMD.ATTACK, {tx, ty, tz}, 0)
+      spGiveOrderToUnit(uid, CMD.ATTACK, { tx, ty, tz }, 0)
     end
   end
 end
 
---------------------------------------------------------------------------------
+
+-- Events
+
+local function CancelZoneAttack()
+  zoneSustained      = false
+  attackZoneCenter   = nil
+  zoneUnits          = nil
+  zoneWaveTimer      = 0
+  predictedData      = {}
+  predictiveUnits    = {}
+  spEcho("Attack Zone cancelled")
+end
+
+local function CancelStream()
+  streamFireEnabled = false
+  streamQueue = {}
+  streamIndex = 1
+  streamTimer = 0
+  streamInterval = 0
+  streamReloadtime = nil
+  streamPending = {}
+  spEcho("Stream Fire: cancelled")
+end
+
+function widget:CommandNotify(cmdID, params, options)
+  -- перехватываем ATTACK при включённом потоковом режиме
+  if streamFireEnabled and cmdID == CMD.ATTACK then
+    -- сохраняем параметры для всех выбранных артиллерий
+    local sel = GetArtySelection()
+    if #sel == 0 then
+      spEcho("Stream: no artillery selected to store ATTACK")
+      return true -- поглощаем команду
+    end
+    local copied = CopyParams(params)
+    for i = 1, #sel do
+      local uid = sel[i]
+      if spValidUnitID(uid) then
+        streamPending[uid] = copied
+      end
+    end
+    spEcho("Stream: ATTACK intercepted and stored for", #sel, "artillery units")
+    return true -- не пропускаем команду движку
+  end
+
+  -- отмены потоковой очереди при MOVE/STOP/PATROL
+  if streamFireEnabled and (cmdID == CMD.MOVE or cmdID == CMD.STOP or cmdID == CMD.PATROL) then
+    CancelStream()
+    return false
+  end
+
+  -- zone commands handling (существующая логика)
+  if not zoneSustained then return false end
+  if cmdID == CMD.MOVE
+  or cmdID == CMD.STOP
+  or cmdID == CMD.PATROL then
+    CancelZoneAttack()
+    return false
+  end
+
+  return false
+end
+
+
+
+
 -- Input handling: toggle preview; left = confirm, right = cancel
---------------------------------------------------------------------------------
+
 function widget:Initialize()
   math.randomseed((os.time() + (Spring.GetGameSeconds and math.floor(spGetGameSeconds()) or 0)) % 2^31)
   UpdateShowButtons()
+
   spEcho("vehheavyarty_zone_predict initialized (flightTime)")
 end
 
@@ -321,6 +467,24 @@ if safeRectCheck(x, y, btnIgnoreToggle) then
   return true
 end
 
+if safeRectCheck(x, y, btnStreamFire) and button == 1 then
+
+  streamFireEnabled = not streamFireEnabled
+  
+  if streamFireEnabled then
+      PrepareStreamQueue()
+  else
+    -- если выключен — сбрасываем
+    streamQueue = {}
+    streamIndex = 1
+    streamTimer = 0
+    streamPending = {} -- очистим все перехваченные цели
+  end
+
+  spEcho("Stream Fire:", streamFireEnabled and "ON" or "OFF")
+  return true
+end
+
   return false
 end
 
@@ -329,9 +493,9 @@ function widget:MouseMove(x, y, button)
   return false
 end
 
---------------------------------------------------------------------------------
+
 -- Draw
---------------------------------------------------------------------------------
+
 function widget:DrawScreen()
   UpdateShowButtons()
   if not showButtons then return end
@@ -341,8 +505,8 @@ function widget:DrawScreen()
   gl.Rect(btnAttackZone.x, btnAttackZone.y, btnAttackZone.x + btnAttackZone.w, btnAttackZone.y + btnAttackZone.h)
   gl.Rect(btnPredict.x, btnPredict.y, btnPredict.x + btnPredict.w, btnPredict.y + btnPredict.h)
   gl.Color(UI_TEXT)
-  gl.Text("Attack Zone", btnAttackZone.x + btnAttackZone.w*0.5, btnAttackZone.y + btnAttackZone.h*0.5, 14, "oc")
-  local predText = (next(predictiveUnits) and "Predictive: ON") or "Predictive: OFF"
+  gl.Text("Зона насаживания", btnAttackZone.x + btnAttackZone.w*0.5, btnAttackZone.y + btnAttackZone.h*0.5, 14, "oc")
+  local predText = (next(predictiveUnits) and "Упреждение: ВКЛ") or "Упреждение: ВЫКЛ"
   gl.Text(predText, btnPredict.x + btnPredict.w*0.5, btnPredict.y + btnPredict.h*0.5, 12, "oc")
 
   if zoneModeActive then
@@ -364,24 +528,51 @@ function widget:DrawScreen()
     end
   end
   
-	  -- radius buttons
-	gl.Color(UI_BG)
-	gl.Rect(btnRadiusMinus.x, btnRadiusMinus.y, btnRadiusMinus.x + btnRadiusMinus.w, btnRadiusMinus.y + btnRadiusMinus.h)
-	gl.Rect(btnRadiusPlus.x, btnRadiusPlus.y, btnRadiusPlus.x + btnRadiusPlus.w, btnRadiusPlus.y + btnRadiusPlus.h)
+    -- radius buttons
+  gl.Color(UI_BG)
+  gl.Rect(btnRadiusMinus.x, btnRadiusMinus.y, btnRadiusMinus.x + btnRadiusMinus.w, btnRadiusMinus.y + btnRadiusMinus.h)
+  gl.Rect(btnRadiusPlus.x, btnRadiusPlus.y, btnRadiusPlus.x + btnRadiusPlus.w, btnRadiusPlus.y + btnRadiusPlus.h)
 
-	gl.Color(UI_TEXT)
-	gl.Text("-", btnRadiusMinus.x + btnRadiusMinus.w*0.5, btnRadiusMinus.y + btnRadiusMinus.h*0.5, 16, "oc")
-	gl.Text("+", btnRadiusPlus.x + btnRadiusPlus.w*0.5, btnRadiusPlus.y + btnRadiusPlus.h*0.5, 16, "oc")
+  gl.Color(UI_TEXT)
+  gl.Text("-", btnRadiusMinus.x + btnRadiusMinus.w*0.5, btnRadiusMinus.y + btnRadiusMinus.h*0.5, 16, "oc")
+  gl.Text("+", btnRadiusPlus.x + btnRadiusPlus.w*0.5, btnRadiusPlus.y + btnRadiusPlus.h*0.5, 16, "oc")
 
-	-- ignore enemies toggle
-	gl.Color(UI_BG)
-	gl.Rect(btnIgnoreToggle.x, btnIgnoreToggle.y, btnIgnoreToggle.x + btnIgnoreToggle.w, btnIgnoreToggle.y + btnIgnoreToggle.h)
-	gl.Color(UI_TEXT)
-	gl.Text(ignoreEnemyInZone and "Ignore: ON" or "Ignore: OFF",
-			btnIgnoreToggle.x + btnIgnoreToggle.w*0.5,
-			btnIgnoreToggle.y + btnIgnoreToggle.h*0.5, 12, "oc")
+  -- ignore enemies toggle
+  gl.Color(UI_BG)
+  gl.Rect(btnIgnoreToggle.x, btnIgnoreToggle.y, btnIgnoreToggle.x + btnIgnoreToggle.w, btnIgnoreToggle.y + btnIgnoreToggle.h)
+  gl.Color(UI_TEXT)
+  gl.Text(ignoreEnemyInZone and "Игнор: ВКЛ" or "Игнор: ВЫКЛ",
+      btnIgnoreToggle.x + btnIgnoreToggle.w*0.5,
+      btnIgnoreToggle.y + btnIgnoreToggle.h*0.5, 12, "oc")
 
   gl.PopMatrix()
+  --sream mode
+  gl.Color(UI_BG)
+  gl.Rect(
+    btnStreamFire.x,
+    btnStreamFire.y,
+    btnStreamFire.x + btnStreamFire.w,
+    btnStreamFire.y + btnStreamFire.h
+  )
+
+  gl.Color(UI_TEXT)
+  gl.Text(
+    streamFireEnabled and "Пидалирование: ВКЛ" or "Пидалирование: ВЫКЛ",
+    btnStreamFire.x + btnStreamFire.w*0.5,
+    btnStreamFire.y + btnStreamFire.h*0.5,
+    12,
+    "oc"
+  )
+  
+  gl.Color(0.6, 0.6, 0.6, 0.6)
+  gl.Text(
+    "Иногда;) Для корректной работы: F+удержание\nили shift+F по цели \n- чтобы выбрать цель,\nиначе стрельба будет по желтой наводке (механика игры)\n+Выключи Авто-аттаку",
+    btnStreamFire.x + btnStreamFire.w*1.2,
+    btnStreamFire.y + btnStreamFire.h*1.0+MARGIN*7,
+    12,
+    "oc"
+  )
+  gl.Color(1, 1, 1)
 end
 
 function widget:DrawWorld()
@@ -427,9 +618,9 @@ function widget:DrawWorld()
   gl.PopMatrix()
 end
 
---------------------------------------------------------------------------------
+
 -- Update loop: waves and predictive recompute - main place where prediction is calculated
---------------------------------------------------------------------------------
+
 local accum = 0
 function widget:Update(dt)
   accum = accum + (dt or 0)
@@ -537,7 +728,7 @@ function widget:Update(dt)
                   info.lastIssue = spGetGameSeconds() or os.time()
                 end
 
-                -- visuals: line from current target pos to aim point (over t seconds)
+                -- visuals: line from current target pos to aim point
                 predictedData[uid] = {
                   targetX = tx, targetY = ty, targetZ = tz,
                   aimX = aimX, aimY = aimY, aimZ = aimZ,
@@ -599,18 +790,85 @@ function widget:Update(dt)
       end
     end
   end
+  
+    -- --- Stream fire logic ---
+  if streamFireEnabled then
+    -- удаляем невалидные юниты из очереди
+    for i = #streamQueue, 1, -1 do
+      if not spValidUnitID(streamQueue[i]) then
+        table.remove(streamQueue, i)
+      end
+    end
+
+    -- если очередь пуста — попытаться пересоздать её из текущего выделения
+    if #streamQueue == 0 then
+      PrepareStreamQueue()
+    end
+  end
+
+  if streamFireEnabled and #streamQueue > 0 then
+    streamTimer = streamTimer + (dt or 0)
+
+    while streamInterval > 0 and streamTimer >= streamInterval do
+      streamTimer = streamTimer - streamInterval
+
+      -- безопасный wrap-around
+      if streamIndex > #streamQueue then
+        streamIndex = 1
+      end
+
+      local uid = streamQueue[streamIndex]
+      if spValidUnitID(uid) then
+        -- если есть перехваченная цель — используем её (и очищаем после использования)
+        local pending = streamPending[uid]
+        if pending then
+          spGiveOrderToUnit(uid, CMD.ATTACK, pending, {})
+          -- не выключаем режим — просто удаляем отложенную цель после отправки
+          streamPending[uid] = nil
+        else
+          -- иначе смотрим текущую ATTACK команду у юнита (повторяем как раньше)
+          local cmds = Spring.GetUnitCommands(uid, 1) or {}
+          local attackCmdIndex = nil
+          for ci = 1, #cmds do
+            if cmds[ci].id == CMD.ATTACK then
+              attackCmdIndex = ci
+              break
+            end
+          end
+
+          if attackCmdIndex then
+            local atk = cmds[attackCmdIndex]
+            Spring.GiveOrderToUnit(uid, CMD.ATTACK, atk.params, {})
+          end
+        end
+      end
+
+      streamIndex = streamIndex + 1
+    end
+  end
 end
 
---------------------------------------------------------------------------------
+
 -- housekeeping
---------------------------------------------------------------------------------
+
 function widget:SelectionChanged(sel)
   UpdateShowButtons()
+  if streamFireEnabled then
+    -- пересобираем очередь по новой выборке, чтобы не нужно было вручную
+    PrepareStreamQueue()
+  end
 end
 
 function widget:UnitDestroyed(unitID)
   predictiveUnits[unitID] = nil
   predictedData[unitID] = nil
+  streamPending[unitID] = nil
+  -- удаляем из streamQueue если есть
+  if streamQueue then
+    for i = #streamQueue,1,-1 do
+      if streamQueue[i] == unitID then table.remove(streamQueue, i) end
+    end
+  end
   if zoneUnits then
     for i = #zoneUnits,1,-1 do
       if zoneUnits[i] == unitID then table.remove(zoneUnits, i) end
@@ -621,3 +879,4 @@ end
 function widget:Shutdown()
   -- nothing special
 end
+
