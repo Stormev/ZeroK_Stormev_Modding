@@ -1,0 +1,86 @@
+return { chicken_drone = {
+  name                = [[Drone]],
+  description         = [[Morphs Into Chicken Structures]],
+  acceleration        = 1.08,
+  activateWhenBuilt   = true,
+  brakeRate           = 1.23,
+  buildDistance       = 240,
+  builder             = true,
+  buildPic            = [[chicken_drone.png]],
+  canGuard            = true,
+  canMove             = true,
+  canPatrol           = true,
+  category            = [[LAND UNARMED]],
+
+  buildoptions        = {
+  },
+
+  customParams        = {
+	morphto_1 = "chickend",
+	morphtime_1 = 20,
+	morphcost_1 = 120,
+
+	morphto_2 = "roost",
+	morphtime_2 = 25,
+	morphcost_2 = 360,
+
+  morphto_3 = "chickenspire",
+	morphtime_3 = 90,
+	morphcost_3 = 2600,
+
+  morphto_4 = "chicken_rafflesia",
+	morphtime_4 = 15,
+	morphcost_4 = 550,
+  },
+
+  script              = [[chicken_drone.lua]],
+
+  energyMake          = 0.4,
+  energyStorage       = 50,
+  explodeAs           = [[SMALL_UNITEX]],
+  floater             = false,
+  footprintX          = 2,
+  footprintZ          = 2,
+  health              = 170,
+  iconType            = [[builder]],
+  idleAutoHeal        = 20,
+  idleTime            = 300,
+  leaveTracks         = true,
+  maxSlope            = 36,
+  maxWaterDepth       = 5000,
+  metalCost           = 60,
+  energyCost          = 60,
+  buildTime           = 60,
+  metalMake           = 0,
+  metalStorage        = 50,
+  movementClass       = [[AKBOT2]],
+  noAutoFire          = false,
+  noChaseCategory     = [[TERRAFORM SATELLITE FIXEDWING GUNSHIP HOVER SHIP SWIM SUB LAND FLOAT SINK TURRET]],
+  objectName          = [[chicken_drone.s3o]],
+  onoffable           = true,
+  power               = 60,
+  pushResistant       = 0,
+  reclaimable         = false,
+  selfDestructAs      = [[SMALL_UNITEX]],
+
+  sfxtypes            = {
+
+    explosiongenerators = {
+      [[custom:blood_spray]],
+      [[custom:blood_explode]],
+      [[custom:dirt]],
+    },
+
+  },
+  sightDistance       = 256,
+  speed               = 54,
+  trackOffset         = 1,
+  trackStrength       = 6,
+  trackStretch        = 1,
+  trackType           = [[ChickenTrack]],
+  trackWidth          = 10,
+  turnRate            = 967,
+  upright             = false,
+  waterline           = 8,
+  workerTime          = 4,
+} }

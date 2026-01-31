@@ -94,11 +94,12 @@
 nebula = {
   name                   = [[Nebula]],
   description            = [[Atmospheric Mothership]],
-  acceleration           = 0.04,
+  acceleration           = 0.08,
   activateWhenBuilt      = true,
   airStrafe              = 0,
+  autoheal               = 10,
   bankingAllowed         = false,
-  brakeRate              = 0.48,
+  brakeRate              = 0.96,
   builder                = false,
   buildPic               = [[nebula.png]],
   canFly                 = true,
@@ -113,12 +114,12 @@ nebula = {
   collisionVolumeType    = [[box]],
 
   corpse                 = [[DEAD]],
-  cruiseAltitude         = 300,
+  cruiseAltitude         = 375,
 
   customParams           = {
     cantuseairpads = 1,
-    modelradius    = [[50]],
-    shield_emit_height = 20,
+    modelradius    = [[40]],
+    shield_emit_height = -100,
 
     outline_x = 420,
     outline_y = 420,
@@ -129,13 +130,14 @@ nebula = {
   floater                = true,
   footprintX             = 5,
   footprintZ             = 5,
-  health                 = 17200,
+  health                 = 4900,
   hoverAttack            = true,
   iconType               = [[nebula]],
-  metalCost              = 6750,
+  metalCost              = 4800,
   noAutoFire             = false,
   noChaseCategory        = [[TERRAFORM FIXEDWING SATELLITE SUB]],
   objectName             = [[nebula.s3o]],
+  radarDistanceJam       = 675,
   script                 = [[nebula.lua]],
   selfDestructAs         = [[LARGE_BUILDINGEX]],
 
@@ -148,9 +150,9 @@ nebula = {
     },
 
   },
-  sightDistance          = 833,
+  sightDistance          = 1400,
   speed                  = 99,
-  turnRate               = 100,
+  turnRate               = 200,
   upright                = true,
   workerTime             = 0,
   
@@ -159,28 +161,28 @@ nebula = {
     {
       def                = [[CANNON]],
       mainDir            = [[0 1 0]], -- top
-      maxAngleDif        = 210,
+      maxAngleDif        = 240,
       badTargetCategory  = [[FIXEDWING]],
       onlyTargetCategory = [[FIXEDWING LAND SINK TURRET SHIP SWIM FLOAT GUNSHIP HOVER]],
     },
     {
       def                = [[CANNON]],
       mainDir            = [[0 -1 0]], -- bottom
-      maxAngleDif        = 210,
+      maxAngleDif        = 240,
       badTargetCategory  = [[FIXEDWING]],
       onlyTargetCategory = [[FIXEDWING LAND SINK TURRET SHIP SWIM FLOAT GUNSHIP HOVER]],
     },
     {
       def                = [[CANNON]],
       mainDir            = [[-1 0 0]], -- left
-      maxAngleDif        = 210,
+      maxAngleDif        = 240,
       badTargetCategory  = [[FIXEDWING]],
       onlyTargetCategory = [[FIXEDWING LAND SINK TURRET SHIP SWIM FLOAT GUNSHIP HOVER]],
     },
     {
       def                = [[CANNON]],
       mainDir            = [[1 0 0]], -- right
-      maxAngleDif        = 210,
+      maxAngleDif        = 240,
       badTargetCategory  = [[FIXEDWING]],
       onlyTargetCategory = [[FIXEDWING LAND SINK TURRET SHIP SWIM FLOAT GUNSHIP HOVER]],
     },
@@ -196,25 +198,34 @@ nebula = {
     CANNON = {
       name                    = [[Kinetic Driver]],
       alphaDecay              = 0.1,
-      areaOfEffect            = 32,
+      areaOfEffect            = 96,
       colormap                = [[1 0.95 0.4 1   1 0.95 0.4 1    0 0 0 0.01    1 0.7 0.2 1]],
-      craterBoost             = 0,
-      craterMult              = 0,
+      craterBoost             = 1,
+      craterMult              = 0.5,
+
+      customParams            = {
+        gatherradius = [[90]],
+        smoothradius = [[60]],
+        smoothmult   = [[0.08]],
+        force_ignore_ground = [[1]],
+
+        light_camera_height = 1500,
+      },
 
       damage                  = {
-        default = 36,
+        default = 40,
       },
 
       explosionGenerator      = [[custom:plasma_hit_32]],
-      impulseBoost            = 0,
-      impulseFactor           = 0.4,
+      impulseBoost            = 30,
+      impulseFactor           = 0.6,
       intensity               = 0.7,
       interceptedByShieldType = 1,
       noGap                   = false,
       noSelfDamage            = true,
-      range                   = 510,
-      reloadtime              = 0.2,
-      rgbColor                = [[1 0.4 0.2]],
+      range                   = 680,
+      reloadtime              = 0.4,
+      rgbColor                = [[1 0.95 0.4]],
       separation              = 2,
       size                    = 2.5,
       sizeDecay               = 0,
@@ -225,28 +236,29 @@ nebula = {
       tolerance               = 5000,
       turret                  = true,
       weaponType              = [[Cannon]],
-      weaponVelocity          = 1200,
+      weaponVelocity          = 1500,
     },
 
     SHIELD = {
       name                    = [[Energy Shield]],
-      craterMult              = 0,
 
       damage                  = {
         default = 10,
       },
+      customParams            = {
+        unlinked                = true,
+        shield_recharge_delay   = 0,
+      },
 
       exteriorShield          = true,
-      impulseFactor           = 0,
-      interceptedByShieldType = 1,
       shieldAlpha             = 0.2,
       shieldBadColor          = [[1 0.1 0.1 1]],
       shieldGoodColor         = [[0.1 0.1 1 1]],
       shieldInterceptType     = 3,
-      shieldPower             = 3600,
-      shieldPowerRegen        = 50,
-      shieldPowerRegenEnergy  = 9,
-      shieldRadius            = 350,
+      shieldPower             = 10200,
+      shieldPowerRegen        = 215,
+      shieldPowerRegenEnergy  = 38,
+      shieldRadius            = 675,
       shieldRepulser          = false,
       smartShield             = true,
       visibleShield           = false,
